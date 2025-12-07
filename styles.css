@@ -1,0 +1,57 @@
+body {
+    font-family: 'Courier New', monospace;
+    max-width: 1200px;
+    margin: 20px auto;
+    padding: 20px;
+    background-color: #0a0a0a;
+    color: #00ff00;
+}
+
+h1 {
+    text-align: center;
+    color: #00ff00;
+    text-shadow: 0 0 10px #00ff00;
+}
+
+.stats {
+    text-align: center;
+    margin: 10px 0;
+    font-size: 18px;
+    color: #00ff00;
+}
+
+#fps {
+    display: inline-block;
+    padding: 5px 15px;
+    border: 1px solid #00ff00;
+    background-color: rgba(0, 255, 0, 0.1);
+}
+
+canvas {
+    border: 2px solid #00ff00;
+    display: block;
+    margin: 20px auto;
+    box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+}
+
+button {
+    padding: 10px 20px;
+    font-size: 16px;
+    cursor: pointer;
+    background-color: #0a0a0a;
+    color: #00ff00;
+    border: 2px solid #00ff00;
+    font-family: 'Courier New', monospace;
+    transition: all 0.3s ease;
+}
+
+button:hover {
+    background-color: #00ff00;
+    color: #0a0a0a;
+    box-shadow: 0 0 15px #00ff00;
+}
+
+.controls {
+    margin: 20px 0;
+    text-align: center;
+}
