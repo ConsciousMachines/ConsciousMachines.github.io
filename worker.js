@@ -6,16 +6,18 @@ const BUFFER_SIZE = 3;
 const NUM_PCS = 84;
 const HP = 128;
 const WP = 128;
-const HG = 4;
-const WG = 6;
-const g_tex_H = HP * HG;
-const g_tex_W = WP * WG;
 
-// PCA control parameters
-const k = 0.9;
-const s = 0.9;
-const p = 1.0;
-const num_pc = NUM_PCS;
+// Dynamic grid size (set by main thread)
+let HG = 4;
+let WG = 6;
+let g_tex_H = HP * HG;
+let g_tex_W = WP * WG;
+
+// // PCA control
+// const k = 0.9;
+// const s = 0.9;
+// const p = 1.0;
+// const num_pc = NUM_PCS;
 
 // File paths
 const stds_file = 'data/stds.bin';
@@ -25,19 +27,21 @@ const eigvecs_file = 'data/eigvecs.bin';
 let stds, mu, eigvecs, z;
 let slotIdx = 0;
 let isInitialized = false;
-
-// Queue control - signals when we can put into queue
 let queueSpaceAvailable = 0;
 let queueSpaceWaiters = [];
 
-// Load binary file as Float32Array
+// PCA control (now mutable)
+let k = 0.9;
+let s = 0.9;
+let p = 1.0;
+let num_pc = NUM_PCS;
+
 async function loadBinaryFile(url) {
     const response = await fetch(url);
     const buffer = await response.arrayBuffer();
     return new Float32Array(buffer);
 }
 
-// Wait for queue to have space (blocking put)
 function waitToSend() {
     return new Promise((resolve) => {
         if (queueSpaceAvailable > 0) {
@@ -49,34 +53,27 @@ function waitToSend() {
     });
 }
 
-// Initialize TensorFlow and data
 async function init() {
     console.log('Initializing TensorFlow.js...');
     
     try {
-        // Try to use WebGL with OffscreenCanvas
         if (typeof OffscreenCanvas !== 'undefined') {
-            console.log('OffscreenCanvas available, trying WebGL backend...');
-            
             const canvas = new OffscreenCanvas(1, 1);
             const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
             
             if (gl) {
-                console.log('WebGL context created successfully');
                 await tf.setBackend('webgl');
                 await tf.ready();
-                console.log('TensorFlow.js ready with backend:', tf.getBackend());
+                console.log('TensorFlow.js ready with backend: webgl');
             } else {
-                console.log('WebGL context failed, falling back to CPU');
                 await tf.setBackend('cpu');
                 await tf.ready();
-                console.log('TensorFlow.js ready with backend:', tf.getBackend());
+                console.log('TensorFlow.js ready with backend: cpu');
             }
         } else {
-            console.log('OffscreenCanvas not available, using CPU backend');
             await tf.setBackend('cpu');
             await tf.ready();
-            console.log('TensorFlow.js ready with backend:', tf.getBackend());
+            console.log('TensorFlow.js ready with backend: cpu');
         }
         
         console.log('Loading data files...');
@@ -95,8 +92,7 @@ async function init() {
         z = tf.mul(tf.randomNormal([HG * WG, NUM_PCS]), stds);
 
         isInitialized = true;
-        console.log('Data loaded successfully!');
-        console.log('Memory info:', tf.memory());
+        console.log(`Data loaded successfully! Grid: ${HG}x${WG}`);
         
         self.postMessage({ type: 'ready' });
     } catch (err) {
@@ -105,12 +101,8 @@ async function init() {
     }
 }
 
-// Generate single image
 async function generateImage() {
-    if (!isInitialized) {
-        console.error('Cannot generate image: not initialized');
-        return null;
-    }
+    if (!isInitialized) return null;
     
     const startTime = performance.now();
     
@@ -118,7 +110,6 @@ async function generateImage() {
         const result = tf.tidy(() => {
             const indices = tf.range(0, NUM_PCS, 1, 'float32');
 
-            // Update z with AR(1) process
             let mask = tf.cast(tf.less(tf.randomUniform([HG * WG, NUM_PCS]), p), 'float32');
             mask = tf.mul(mask, tf.cast(tf.less(indices, num_pc), 'float32'));
             
@@ -128,13 +119,11 @@ async function generateImage() {
                 tf.mul(tf.mul(mask, noise), stds)
             );
             
-            // Store old z to dispose later
             const oldZ = z;
             z = tf.add(tf.mul(k, z), update);
             tf.keep(z);
             oldZ.dispose();
 
-            // Generate image
             const z_slice = tf.slice(z, [0, 0], [HG * WG, num_pc]);
             const eigvecs_slice = tf.slice(eigvecs, [0, 0], [num_pc, HP * WP * 3]);
             
@@ -148,11 +137,9 @@ async function generateImage() {
             return x;
         });
         
-        // Extract image data
         const data = await result.data();
         result.dispose();
         
-        // Convert to RGBA format
         const rgbaData = new Uint8ClampedArray(HG * HP * WG * WP * 4);
         for (let i = 0; i < HG * HP * WG * WP; i++) {
             rgbaData[i * 4] = data[i * 3];
@@ -174,17 +161,13 @@ async function generateImage() {
     }
 }
 
-// Continuously generate images (matches Python pattern)
 async function continuousGenerate() {
     while (true) {
-        // STEP 1: Generate image (NOT blocking)
         const result = await generateImage();
         
         if (result) {
-            // STEP 2: Wait for queue space (BLOCKING)
             await waitToSend();
             
-            // STEP 3: Send to main thread
             self.postMessage({
                 type: 'image',
                 slotIdx: result.slotIdx,
@@ -195,19 +178,43 @@ async function continuousGenerate() {
     }
 }
 
-// Message handler
 self.onmessage = function(e) {
     const { type } = e.data;
     
     switch(type) {
+        case 'set_grid':
+            // Update grid dimensions
+            HG = e.data.HG;
+            WG = e.data.WG;
+            g_tex_H = HP * HG;
+            g_tex_W = WP * WG;
+            console.log(`Worker grid set to ${HG}x${WG}`);
+            
+            // Reinitialize z with new dimensions if already initialized
+            if (isInitialized && z) {
+                z.dispose();
+                z = tf.mul(tf.randomNormal([HG * WG, NUM_PCS]), stds);
+                tf.keep(z);
+            }
+            
+            init();
+            break;
+
+        case 'update_params':
+            // Update PCA parameters
+            k = e.data.params.k;
+            s = e.data.params.s;
+            p = e.data.params.p;
+            num_pc = e.data.params.num_pc;
+            console.log(`Params updated: k=${k}, s=${s}, p=${p}, num_pc=${num_pc}`);
+            break;
+            
         case 'start_generating':
-            // Initial signal - queue has BUFFER_SIZE spaces
             queueSpaceAvailable = BUFFER_SIZE;
             continuousGenerate();
             break;
             
         case 'queue_has_space':
-            // Main thread signals that queue has space (after consuming an item)
             if (queueSpaceWaiters.length > 0) {
                 const resolve = queueSpaceWaiters.shift();
                 resolve();
@@ -217,6 +224,3 @@ self.onmessage = function(e) {
             break;
     }
 };
-
-// Initialize on load
-init();

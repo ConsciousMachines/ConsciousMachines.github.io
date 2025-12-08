@@ -2,19 +2,66 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>PCA Image Generator</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <h1>PCA Image Generator</h1>
+    <!-- <p><b>PCA Image Generator</b></p> -->
     <div class="stats">
         <div id="fps">FPS: 0</div>
     </div>
-    <div class="controls">
-        <button id="generateBtn">Generate Image</button>
+    
+    <div class="controls-panel">
+
+        <!-- <div class="title-group">
+            <div class="text"><b>PCA Generator</b></div>
+        </div> -->
+
+        <div class="control-group">
+            <label>
+                <span class="label-text">randomness</span>
+                <span class="value" id="k-value">0.90</span>
+            </label>
+            <input type="range" id="k-slider" min="0" max="99" value="90" step="1">
+        </div>
+        
+        <div class="control-group">
+            <label>
+                <span class="label-text">intensity</span>
+                <span class="value" id="s-value">0.90</span>
+            </label>
+            <input type="range" id="s-slider" min="0" max="300" value="90" step="1">
+        </div>
+        
+        <div class="control-group">
+            <label>
+                <span class="label-text">speed</span>
+                <span class="value" id="steps-value">10</span>
+            </label>
+            <input type="range" id="steps-slider" min="1" max="100" value="10" step="1">
+        </div>
+        
+        <div class="control-group">
+            <label>
+                <span class="label-text">variability</span>
+                <span class="value" id="p-value">1.00</span>
+            </label>
+            <input type="range" id="p-slider" min="0" max="100" value="100" step="1">
+        </div>
+        
+        <div class="control-group">
+            <label>
+                <span class="label-text">structure</span>
+                <span class="value" id="num_pc-value">84</span>
+            </label>
+            <input type="range" id="num_pc-slider" min="1" max="84" value="84" step="1">
+        </div>
     </div>
-    <canvas id="canvas"></canvas>
+    
+    <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+    </div>
 
     <script src="app.js"></script>
 </body>
