@@ -94,11 +94,9 @@ void main() {
 `;
 
 
-// Dataset switching
-async function switchDataset(datasetName) {
-    if (currentDataset === datasetName && animationRunning) return;
-    
-    console.log(`Switching to dataset: ${datasetName}`);
+// Unified function to reload dataset and recalculate grid
+async function reloadDataset(datasetName) {
+    console.log(`Reloading dataset: ${datasetName}`);
     
     // Update active button
     document.querySelectorAll('.dataset-btn').forEach(btn => {
@@ -108,12 +106,111 @@ async function switchDataset(datasetName) {
         }
     });
     
-    // Update dataset
+    // Update current dataset
     currentDataset = datasetName;
     
-    // Load dataset with current grid
-    await loadDatasetWithGrid(datasetName, HG, WG);
+    // Stop animation
+    animationRunning = false;
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Clear queue
+    imageQueue = [];
+    queueWaiters = [];
+    pendingUpload = null;
+    t = 0.0;
+    currTexIdx = 0;
+    nextTexIdx = 1;
+    
+    // Terminate old worker
+    if (worker) {
+        worker.terminate();
+    }
+    
+    // Create new worker and load dataset
+    await loadDatasetAndInitialize(datasetName);
 }
+
+// Load dataset and initialize - handles the 6 parameters: mu, stds, eigvecs, NUM_PCS, HP, WP
+function loadDatasetAndInitialize(datasetName) {
+    return new Promise((resolve) => {
+        worker = new Worker('worker.js');
+        isReady = false;
+        
+        worker.onmessage = function(e) {
+            const { type, slotIdx, data, generationTime } = e.data;
+            
+            switch(type) {
+                case 'params_loaded':
+                    // STEP 1: Worker has loaded params.bin (NUM_PCS, HP, WP)
+                    NUM_PCS = e.data.NUM_PCS;
+                    HP = e.data.HP;
+                    WP = e.data.WP;
+                    
+                    console.log(`Loaded params: NUM_PCS=${NUM_PCS}, HP=${HP}, WP=${WP}`);
+                    
+                    // Update num_pc slider max
+                    const numPcSlider = document.getElementById('num_pc-slider');
+                    numPcSlider.max = NUM_PCS;
+                    if (pcaParams.num_pc > NUM_PCS) {
+                        pcaParams.num_pc = NUM_PCS;
+                        numPcSlider.value = NUM_PCS;
+                        document.getElementById('num_pc-value').textContent = NUM_PCS;
+                    }
+                    
+                    // STEP 2: Calculate optimal grid based on new HP, WP
+                    const grid = calculateGridSize();
+                    HG = grid.HG;
+                    WG = grid.WG;
+                    g_tex_H = HP * HG;
+                    g_tex_W = WP * WG;
+                    
+                    console.log(`Calculated grid: ${HG}x${WG} (${g_tex_W}x${g_tex_H} pixels)`);
+                    
+                    // STEP 3: Tell worker about grid size, which will trigger init
+                    worker.postMessage({ type: 'set_grid', HG: HG, WG: WG });
+                    
+                    // STEP 4: Initialize WebGL with new dimensions
+                    cleanupWebGL();
+                    initWebGL();
+                    
+                    resolve();
+                    break;
+                    
+                case 'ready':
+                    // STEP 5: Worker has loaded mu, stds, eigvecs and initialized
+                    isReady = true;
+                    console.log(`✓ Dataset ready: ${datasetName} | Grid: ${HG}x${WG} | Tile: ${HP}x${WP}`);
+                    worker.postMessage({ type: 'start_generating' });
+                    fillBuffer();
+                    break;
+                    
+                case 'image':
+                    queuePut({ slotIdx, imageData: data, generationTime });
+                    break;
+                    
+                case 'error':
+                    console.error('Worker error:', data);
+                    alert('Error: ' + data);
+                    break;
+            }
+        };
+        
+        worker.onerror = function(error) {
+            console.error('Worker error:', error);
+        };
+        
+        // Send dataset name to worker (will load params.bin first)
+        worker.postMessage({ type: 'load_dataset', dataset: datasetName });
+    });
+}
+
+// Dataset switching (just calls reload)
+async function switchDataset(datasetName) {
+    if (currentDataset === datasetName && animationRunning) return;
+    await reloadDataset(datasetName);
+}
+
+
 
 // Load dataset - waits for params from worker
 function loadDatasetWithGrid(datasetName, hg, wg) {
@@ -698,17 +795,19 @@ async function restartWithGridSize(newHG, newWG) {
     await loadDatasetWithGrid(currentDataset, newHG, newWG);
 }
 
-// Handle resize
+
+// Handle resize (recalculate grid and reload)
 let resizeTimeout;
 function handleResize() {
     clearTimeout(resizeTimeout);
     resizeTimeout = setTimeout(() => {
         const newGrid = calculateGridSize();
         
-        // Check if grid size changed
+        // Check if grid size would change with current HP, WP
         if (newGrid.HG !== HG || newGrid.WG !== WG) {
-            console.log(`Grid size changed: ${HG}x${WG} → ${newGrid.HG}x${newGrid.WG}`);
-            restartWithGridSize(newGrid.HG, newGrid.WG);
+            console.log(`Resize detected: ${HG}x${WG} → ${newGrid.HG}x${newGrid.WG}`);
+            // Reload current dataset (will recalculate grid based on HP, WP)
+            reloadDataset(currentDataset);
         } else {
             // Just resize canvas display
             const canvas = document.getElementById('canvas');
@@ -725,11 +824,8 @@ async function init() {
     initSliders();
     initDatasetButtons();
     
-    // Calculate initial grid
-    const grid = calculateGridSize();
-    
-    // Load initial dataset with grid
-    await loadDatasetWithGrid(currentDataset, grid.HG, grid.WG);
+    // Load initial dataset (will calculate grid automatically)
+    await reloadDataset(currentDataset);
     
     // Start animation
     animate();
