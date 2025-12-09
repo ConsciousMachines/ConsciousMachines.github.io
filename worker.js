@@ -3,26 +3,25 @@ importScripts('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0');
 
 // --- GLOBALS
 const BUFFER_SIZE = 3;
-const NUM_PCS = 84;
-const HP = 128;
-const WP = 128;
 
-// Dynamic grid size (set by main thread)
+// Dynamic parameters (loaded from params.bin)
+let NUM_PCS = 84;
+let HP = 128;
+let WP = 128;
+
 let HG = 4;
 let WG = 6;
 let g_tex_H = HP * HG;
 let g_tex_W = WP * WG;
 
-// // PCA control
-// const k = 0.9;
-// const s = 0.9;
-// const p = 1.0;
-// const num_pc = NUM_PCS;
+// Current dataset
+let currentDataset = 'anime1';
 
-// File paths
-const stds_file = 'data/stds.bin';
-const mu_file = 'data/mu.bin';
-const eigvecs_file = 'data/eigvecs.bin';
+// PCA control (mutable)
+let k = 0.9;
+let s = 0.9;
+let p = 1.0;
+let num_pc = NUM_PCS;
 
 let stds, mu, eigvecs, z;
 let slotIdx = 0;
@@ -30,16 +29,16 @@ let isInitialized = false;
 let queueSpaceAvailable = 0;
 let queueSpaceWaiters = [];
 
-// PCA control (now mutable)
-let k = 0.9;
-let s = 0.9;
-let p = 1.0;
-let num_pc = NUM_PCS;
-
 async function loadBinaryFile(url) {
     const response = await fetch(url);
     const buffer = await response.arrayBuffer();
     return new Float32Array(buffer);
+}
+
+async function loadInt32File(url) {
+    const response = await fetch(url);
+    const buffer = await response.arrayBuffer();
+    return new Int32Array(buffer);
 }
 
 function waitToSend() {
@@ -51,6 +50,32 @@ function waitToSend() {
             queueSpaceWaiters.push(resolve);
         }
     });
+}
+
+async function loadDatasetParams(dataset) {
+    try {
+        console.log(`Loading params for dataset: ${dataset}`);
+        const params = await loadInt32File(`data/${dataset}/params.bin`);
+        
+        NUM_PCS = params[0];
+        HP = params[1];
+        WP = params[2];
+        
+        console.log(`Loaded params: NUM_PCS=${NUM_PCS}, HP=${HP}, WP=${WP}`);
+        
+        // Notify main thread of new params
+        self.postMessage({
+            type: 'params_loaded',
+            NUM_PCS: NUM_PCS,
+            HP: HP,
+            WP: WP
+        });
+        
+        return true;
+    } catch (err) {
+        console.error('Error loading params:', err);
+        return false;
+    }
 }
 
 async function init() {
@@ -79,10 +104,16 @@ async function init() {
         console.log('Loading data files...');
         
         const [stds_data, mu_data, eigvecs_data] = await Promise.all([
-            loadBinaryFile(stds_file),
-            loadBinaryFile(mu_file),
-            loadBinaryFile(eigvecs_file)
+            loadBinaryFile(`data/${currentDataset}/stds.bin`),
+            loadBinaryFile(`data/${currentDataset}/mu.bin`),
+            loadBinaryFile(`data/${currentDataset}/eigvecs.bin`)
         ]);
+
+        // Dispose old tensors if they exist
+        if (stds) stds.dispose();
+        if (mu) mu.dispose();
+        if (eigvecs) eigvecs.dispose();
+        if (z) z.dispose();
 
         stds = tf.tensor1d(stds_data);
         mu = tf.tensor1d(mu_data);
@@ -91,8 +122,13 @@ async function init() {
         // Initialize z for AR(1) process
         z = tf.mul(tf.randomNormal([HG * WG, NUM_PCS]), stds);
 
+        // Reset num_pc if it exceeds NUM_PCS
+        if (num_pc > NUM_PCS) {
+            num_pc = NUM_PCS;
+        }
+
         isInitialized = true;
-        console.log(`Data loaded successfully! Grid: ${HG}x${WG}`);
+        console.log(`Data loaded successfully! Dataset: ${currentDataset}, Grid: ${HG}x${WG}`);
         
         self.postMessage({ type: 'ready' });
     } catch (err) {
@@ -178,34 +214,46 @@ async function continuousGenerate() {
     }
 }
 
-self.onmessage = function(e) {
+self.onmessage = async function(e) {
     const { type } = e.data;
     
     switch(type) {
+        case 'load_dataset':
+            currentDataset = e.data.dataset;
+            isInitialized = false;
+            
+            // Load params first
+            const paramsLoaded = await loadDatasetParams(currentDataset);
+            if (paramsLoaded) {
+                // Don't init yet, wait for grid size from main thread
+            }
+            break;
+            
         case 'set_grid':
-            // Update grid dimensions
             HG = e.data.HG;
             WG = e.data.WG;
             g_tex_H = HP * HG;
             g_tex_W = WP * WG;
             console.log(`Worker grid set to ${HG}x${WG}`);
             
-            // Reinitialize z with new dimensions if already initialized
-            if (isInitialized && z) {
-                z.dispose();
-                z = tf.mul(tf.randomNormal([HG * WG, NUM_PCS]), stds);
-                tf.keep(z);
+            // Now initialize with the dataset
+            if (!isInitialized) {
+                await init();
+            } else {
+                // Just update z if already initialized
+                if (z) {
+                    z.dispose();
+                    z = tf.mul(tf.randomNormal([HG * WG, NUM_PCS]), stds);
+                    tf.keep(z);
+                }
             }
-            
-            init();
             break;
-
+            
         case 'update_params':
-            // Update PCA parameters
             k = e.data.params.k;
             s = e.data.params.s;
             p = e.data.params.p;
-            num_pc = e.data.params.num_pc;
+            num_pc = Math.min(e.data.params.num_pc, NUM_PCS);
             console.log(`Params updated: k=${k}, s=${s}, p=${p}, num_pc=${num_pc}`);
             break;
             

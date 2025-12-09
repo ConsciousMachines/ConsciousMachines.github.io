@@ -7,28 +7,23 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <!-- <p><b>PCA Image Generator</b></p> -->
+    <!-- <h1>PCA Image Generator</h1> -->
     <div class="stats">
         <div id="fps">FPS: 0</div>
     </div>
     
     <div class="controls-panel">
-
-        <!-- <div class="title-group">
-            <div class="text"><b>PCA Generator</b></div>
-        </div> -->
-
         <div class="control-group">
             <label>
-                <span class="label-text">randomness</span>
+                <span class="label-text">autocorrelation</span>
                 <span class="value" id="k-value">0.90</span>
             </label>
-            <input type="range" id="k-slider" min="0" max="99" value="90" step="1">
+            <input type="range" id="k-slider" min="0" max="100" value="90" step="1">
         </div>
         
         <div class="control-group">
             <label>
-                <span class="label-text">intensity</span>
+                <span class="label-text">variance</span>
                 <span class="value" id="s-value">0.90</span>
             </label>
             <input type="range" id="s-slider" min="0" max="300" value="90" step="1">
@@ -44,7 +39,7 @@
         
         <div class="control-group">
             <label>
-                <span class="label-text">variability</span>
+                <span class="label-text">dropout</span>
                 <span class="value" id="p-value">1.00</span>
             </label>
             <input type="range" id="p-slider" min="0" max="100" value="100" step="1">
@@ -52,10 +47,20 @@
         
         <div class="control-group">
             <label>
-                <span class="label-text">structure</span>
+                <span class="label-text">components</span>
                 <span class="value" id="num_pc-value">84</span>
             </label>
             <input type="range" id="num_pc-slider" min="1" max="84" value="84" step="1">
+        </div>
+        
+        <div class="dataset-group">
+            <!-- <div class="dataset-label">Dataset</div> -->
+            <div class="dataset-buttons">
+                <button class="dataset-btn active" data-dataset="anime1">Anime 1</button>
+                <button class="dataset-btn" data-dataset="anime2">Anime 2</button>
+                <button class="dataset-btn" data-dataset="human">Human</button>
+                <button class="dataset-btn" data-dataset="animal">Animal</button>
+            </div>
         </div>
     </div>
     

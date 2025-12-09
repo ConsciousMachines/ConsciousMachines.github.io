@@ -1,10 +1,14 @@
-// Tile dimensions (per tile)
-const HP = 128;
-const WP = 128;
+// Tile dimensions (per tile) - NOW DYNAMIC
+let HP = 128;
+let WP = 128;
+let NUM_PCS = 84;
 
 // Maximum grid size
 const MAX_HG = 4;
 const MAX_WG = 6;
+
+// Current dataset
+let currentDataset = 'anime1';
 
 // Circular buffer settings
 const BUFFER_SIZE = 3;
@@ -88,6 +92,124 @@ void main() {
     FragColor = vec4(result, 1.0);
 }
 `;
+
+
+// Dataset switching
+async function switchDataset(datasetName) {
+    if (currentDataset === datasetName && animationRunning) return;
+    
+    console.log(`Switching to dataset: ${datasetName}`);
+    
+    // Update active button
+    document.querySelectorAll('.dataset-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.dataset === datasetName) {
+            btn.classList.add('active');
+        }
+    });
+    
+    // Update dataset
+    currentDataset = datasetName;
+    
+    // Load dataset with current grid
+    await loadDatasetWithGrid(datasetName, HG, WG);
+}
+
+// Load dataset - waits for params from worker
+function loadDatasetWithGrid(datasetName, hg, wg) {
+    return new Promise((resolve) => {
+        // Stop animation
+        animationRunning = false;
+        
+        // Clear queue
+        imageQueue = [];
+        queueWaiters = [];
+        pendingUpload = null;
+        t = 0.0;
+        currTexIdx = 0;
+        nextTexIdx = 1;
+        
+        // Terminate old worker
+        if (worker) {
+            worker.terminate();
+        }
+        
+        worker = new Worker('worker.js');
+        isReady = false;
+        
+        worker.onmessage = function(e) {
+            const { type, slotIdx, data, generationTime } = e.data;
+            
+            switch(type) {
+                case 'params_loaded':
+                    // Worker has loaded params.bin
+                    NUM_PCS = e.data.NUM_PCS;
+                    HP = e.data.HP;
+                    WP = e.data.WP;
+                    
+                    console.log(`Dataset params: NUM_PCS=${NUM_PCS}, HP=${HP}, WP=${WP}`);
+                    
+                    // Update num_pc slider max
+                    const numPcSlider = document.getElementById('num_pc-slider');
+                    numPcSlider.max = NUM_PCS;
+                    if (pcaParams.num_pc > NUM_PCS) {
+                        pcaParams.num_pc = NUM_PCS;
+                        numPcSlider.value = NUM_PCS;
+                        document.getElementById('num_pc-value').textContent = NUM_PCS;
+                    }
+                    
+                    // Update global dimensions
+                    HG = hg;
+                    WG = wg;
+                    g_tex_H = HP * HG;
+                    g_tex_W = WP * WG;
+                    
+                    // Tell worker about grid size
+                    worker.postMessage({ type: 'set_grid', HG: HG, WG: WG });
+                    
+                    // Reinitialize WebGL with new dimensions
+                    cleanupWebGL();
+                    initWebGL();
+                    
+                    resolve();
+                    break;
+                    
+                case 'ready':
+                    isReady = true;
+                    console.log(`Worker ready with dataset: ${datasetName}, grid: ${HG}x${WG}`);
+                    worker.postMessage({ type: 'start_generating' });
+                    fillBuffer();
+                    break;
+                    
+                case 'image':
+                    queuePut({ slotIdx, imageData: data, generationTime });
+                    break;
+                    
+                case 'error':
+                    console.error('Worker error:', data);
+                    alert('Error: ' + data);
+                    break;
+            }
+        };
+        
+        worker.onerror = function(error) {
+            console.error('Worker error:', error);
+        };
+        
+        // Send dataset name to worker
+        worker.postMessage({ type: 'load_dataset', dataset: datasetName });
+    });
+}
+
+
+// Initialize dataset buttons
+function initDatasetButtons() {
+    document.querySelectorAll('.dataset-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            switchDataset(btn.dataset.dataset);
+        });
+    });
+}
 
 // Initialize sliders
 function initSliders() {
@@ -567,34 +689,13 @@ async function fillBuffer() {
     animationRunning = true;
 }
 
-// Restart with new grid size
+
+// Restart with new grid size (called on resize)
 async function restartWithGridSize(newHG, newWG) {
     console.log(`Restarting with grid ${newHG}x${newWG}...`);
     
-    // Stop animation
-    animationRunning = false;
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
-    // Clear queue
-    imageQueue = [];
-    queueWaiters = [];
-    pendingUpload = null;
-    t = 0.0;
-    currTexIdx = 0;
-    nextTexIdx = 1;
-    
-    // Update dimensions
-    HG = newHG;
-    WG = newWG;
-    g_tex_H = HP * HG;
-    g_tex_W = WP * WG;
-    
-    // Cleanup and reinit WebGL
-    cleanupWebGL();
-    initWebGL();
-    
-    // Restart worker
-    initWorker(HG, WG);
+    // Reload current dataset with new grid size
+    await loadDatasetWithGrid(currentDataset, newHG, newWG);
 }
 
 // Handle resize
@@ -618,30 +719,24 @@ function handleResize() {
     }, 500); // Debounce
 }
 
-// Modify init function to initialize sliders
-function init() {
-    // Initialize sliders first
+// Modified init function
+async function init() {
+    // Initialize controls
     initSliders();
+    initDatasetButtons();
     
-    // Calculate initial grid size
+    // Calculate initial grid
     const grid = calculateGridSize();
-    HG = grid.HG;
-    WG = grid.WG;
-    g_tex_H = HP * HG;
-    g_tex_W = WP * WG;
     
-    console.log(`Initial grid: ${HG}x${WG}`);
+    // Load initial dataset with grid
+    await loadDatasetWithGrid(currentDataset, grid.HG, grid.WG);
     
-    if (initWebGL()) {
-        initWorker(HG, WG);
-        animate();
-        
-        // Add resize listener
-        window.addEventListener('resize', handleResize);
-        window.addEventListener('orientationchange', handleResize);
-    } else {
-        alert('Failed to initialize WebGL');
-    }
+    // Start animation
+    animate();
+    
+    // Add resize listener
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
 }
 
 init();
